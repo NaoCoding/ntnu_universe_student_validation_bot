@@ -50,6 +50,8 @@ class Settings:
     student_role_prefix_map: dict[str, str]
     default_student_role: str | None
     verification_code_ttl_minutes: int
+    email_send_rate_limit_seconds: int
+    student_reverification_cooldown_days: int
     database_file: Path
 
     @classmethod
@@ -61,6 +63,24 @@ class Settings:
             raise RuntimeError("VERIFICATION_CODE_TTL_MINUTES must be an integer") from exc
         if ttl <= 0:
             raise RuntimeError("VERIFICATION_CODE_TTL_MINUTES must be positive")
+
+        try:
+            email_rate_limit = int(os.getenv("EMAIL_SEND_RATE_LIMIT_SECONDS", "60"))
+        except ValueError as exc:
+            raise RuntimeError("EMAIL_SEND_RATE_LIMIT_SECONDS must be an integer") from exc
+        if email_rate_limit <= 0:
+            raise RuntimeError("EMAIL_SEND_RATE_LIMIT_SECONDS must be positive")
+
+        try:
+            reverification_days = int(
+                os.getenv("STUDENT_REVERIFICATION_COOLDOWN_DAYS", "30")
+            )
+        except ValueError as exc:
+            raise RuntimeError(
+                "STUDENT_REVERIFICATION_COOLDOWN_DAYS must be an integer"
+            ) from exc
+        if reverification_days <= 0:
+            raise RuntimeError("STUDENT_REVERIFICATION_COOLDOWN_DAYS must be positive")
 
         default_role = os.getenv("DEFAULT_STUDENT_ROLE", "").strip() or None
         return cls(
@@ -76,5 +96,7 @@ class Settings:
             student_role_prefix_map=_role_map("STUDENT_ROLE_PREFIX_MAP_JSON"),
             default_student_role=default_role,
             verification_code_ttl_minutes=ttl,
+            email_send_rate_limit_seconds=email_rate_limit,
+            student_reverification_cooldown_days=reverification_days,
             database_file=Path(os.getenv("DATABASE_FILE", "verification.db")),
         )

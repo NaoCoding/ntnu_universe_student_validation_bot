@@ -41,6 +41,8 @@ Verification requests are stored in the SQLite `verification_records` table. Eac
 
    As a server administrator, run `/setup_verification` in the configured verification channel. The command posts the persistent button panel.
 
+Email verification requests are rate-limited per normalized email address. By default, an address can receive at most one code every 60 seconds (`EMAIL_SEND_RATE_LIMIT_SECONDS`). After a student number passes email verification, that student number cannot pass again for 30 days (`STUDENT_REVERIFICATION_COOLDOWN_DAYS`).
+
 ## Verification code formula
 
 The sent code is exactly:

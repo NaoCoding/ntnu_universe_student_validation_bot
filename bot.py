@@ -76,6 +76,7 @@ class VerificationBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
         self.settings = settings
         self.database = VerificationDatabase(settings.database_file)
+        self.email_send_lock = asyncio.Lock()
         self.gmail = GmailSender(
             settings.gmail_credentials_file,
             settings.gmail_token_file,
@@ -388,29 +389,68 @@ class SchoolEmailModal(discord.ui.Modal, title="學校信箱驗證"):
             self.bot.settings.hash_secret_part_2,
         )
         await interaction.response.defer(ephemeral=True)
-        try:
-            await asyncio.to_thread(self.bot.gmail.send_verification_code, email, code)
-        except Exception:
-            logger.exception("Failed to send verification email to %s", email)
-            await interaction.followup.send(
-                embed=applicant_embed(
-                    title="驗證信寄送失敗",
-                    description="目前無法寄出驗證信，請稍後再試；如果問題持續，也可以改用人工驗證。",
-                    color=discord.Color.red(),
-                ),
-                ephemeral=True,
+        async with self.bot.email_send_lock:
+            now = time.time()
+            student_cooldown_seconds = (
+                self.bot.settings.student_reverification_cooldown_days * 24 * 60 * 60
             )
-            return
+            if self.bot.database.has_recent_passed_student_verification(
+                student_number,
+                now=now,
+                cooldown_seconds=student_cooldown_seconds,
+            ):
+                await interaction.followup.send(
+                    embed=applicant_embed(
+                        title="Verification already completed",
+                        description=(
+                            "This student ID passed verification recently and cannot be "
+                            f"verified again for {self.bot.settings.student_reverification_cooldown_days} days."
+                        ),
+                        color=discord.Color.gold(),
+                    ),
+                    ephemeral=True,
+                )
+                return
+            if self.bot.database.is_email_send_rate_limited(
+                email,
+                now=now,
+                window_seconds=self.bot.settings.email_send_rate_limit_seconds,
+            ):
+                await interaction.followup.send(
+                    embed=applicant_embed(
+                        title="Please wait before requesting another code",
+                        description=(
+                            "A verification code was sent to this email address recently. "
+                            f"Please wait {self.bot.settings.email_send_rate_limit_seconds} seconds."
+                        ),
+                        color=discord.Color.gold(),
+                    ),
+                    ephemeral=True,
+                )
+                return
+            try:
+                await asyncio.to_thread(self.bot.gmail.send_verification_code, email, code)
+            except Exception:
+                logger.exception("Failed to send verification email to %s", email)
+                await interaction.followup.send(
+                    embed=applicant_embed(
+                        title="驗證信寄送失敗",
+                        description="目前無法寄出驗證信，請稍後再試；如果問題持續，也可以改用人工驗證。",
+                        color=discord.Color.red(),
+                    ),
+                    ephemeral=True,
+                )
+                return
 
-        self.bot.database.save_email_session(
-            interaction.user.id,
-            interaction.guild.id,
-            email,
-            student_number,
-            code,
-            time.time() + self.bot.settings.verification_code_ttl_minutes * 60,
-            requested_at=requested_at,
-        )
+            self.bot.database.save_email_session(
+                interaction.user.id,
+                interaction.guild.id,
+                email,
+                student_number,
+                code,
+                time.time() + self.bot.settings.verification_code_ttl_minutes * 60,
+                requested_at=requested_at,
+            )
         email_sent = applicant_embed(
             title="驗證信已寄出 📬",
             description="請查看你的信箱，取得驗證碼後點選下方按鈕完成驗證。",
@@ -492,6 +532,27 @@ class CodeModal(discord.ui.Modal, title="輸入信箱驗證碼"):
                     title="請回到原本的伺服器",
                     description="這組驗證碼只能在你開始驗證的 Discord 伺服器使用。",
                     color=discord.Color.red(),
+                ),
+                ephemeral=True,
+            )
+            return
+
+        student_cooldown_seconds = (
+            self.bot.settings.student_reverification_cooldown_days * 24 * 60 * 60
+        )
+        if self.bot.database.has_recent_passed_student_verification(
+            session.student_number,
+            now=time.time(),
+            cooldown_seconds=student_cooldown_seconds,
+        ):
+            await interaction.response.send_message(
+                embed=applicant_embed(
+                    title="Verification already completed",
+                    description=(
+                        "This student ID passed verification recently and cannot be "
+                        f"verified again for {self.bot.settings.student_reverification_cooldown_days} days."
+                    ),
+                    color=discord.Color.gold(),
                 ),
                 ephemeral=True,
             )

@@ -66,6 +66,18 @@ class VerificationDatabase:
             )
             """
         )
+        self.connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_verification_email_requests
+            ON verification_records (method, email, requested_at)
+            """
+        )
+        self.connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_verification_student_passes
+            ON verification_records (method, student_number, passed_at)
+            """
+        )
         email_columns = {
             row["name"]
             for row in self.connection.execute("PRAGMA table_info(email_sessions)")
@@ -164,6 +176,44 @@ class VerificationDatabase:
     def delete_email_session(self, user_id: int) -> None:
         self.connection.execute("DELETE FROM email_sessions WHERE user_id = ?", (user_id,))
         self.connection.commit()
+
+    def is_email_send_rate_limited(
+        self, email: str, now: float | None = None, window_seconds: int = 60
+    ) -> bool:
+        """Return whether this email address was used for a recent request."""
+
+        now = now if now is not None else time.time()
+        row = self.connection.execute(
+            """
+            SELECT 1 FROM verification_records
+            WHERE method = 'email' AND email = ? AND requested_at > ?
+            LIMIT 1
+            """,
+            (email, now - window_seconds),
+        ).fetchone()
+        return row is not None
+
+    def has_recent_passed_student_verification(
+        self,
+        student_number: str,
+        now: float | None = None,
+        cooldown_seconds: int = 30 * 24 * 60 * 60,
+    ) -> bool:
+        """Return whether a student number passed automated verification recently."""
+
+        now = now if now is not None else time.time()
+        row = self.connection.execute(
+            """
+            SELECT 1 FROM verification_records
+            WHERE method = 'email'
+              AND student_number = ?
+              AND passed_at IS NOT NULL
+              AND passed_at > ?
+            LIMIT 1
+            """,
+            (student_number, now - cooldown_seconds),
+        ).fetchone()
+        return row is not None
 
     def save_manual_session(
         self, user_id: int, guild_id: int, requested_at: float | None = None
