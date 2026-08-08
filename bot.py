@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import asyncio
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 import discord
@@ -22,15 +23,49 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 
 
+def discord_timestamp(timestamp: float) -> str:
+    """Render a Unix timestamp using Discord's viewer-localized timestamp format."""
+
+    return f"<t:{int(timestamp)}:F>"
+
+
+def applicant_embed(
+    *,
+    title: str,
+    description: str,
+    color: discord.Color,
+) -> discord.Embed:
+    """Build a consistent, readable embed for applicant-facing messages."""
+
+    embed = discord.Embed(title=title, description=description, color=color)
+    embed.set_footer(text="NTNU Universe｜學生驗證中心")
+    return embed
+
+
 def panel_embed() -> discord.Embed:
-    return discord.Embed(
-        title="NTNU Universe 資工系學生驗證",
+    embed = applicant_embed(
+        title="NTNU Universe｜學生驗證中心",
         description=(
-            "本系生請使用學校信箱驗證。\n"
-            "若你不是本系生或尚未取得學校信箱，請點選人工驗證並私訊上傳文件。"
+            "請選擇最適合你的驗證方式。完成驗證後，系統會自動發放對應的 Discord 身分組。"
         ),
         color=discord.Color.blurple(),
     )
+    embed.add_field(
+        name="📧 學校信箱驗證",
+        value="使用 NTNU 學校信箱收取驗證碼，通常可立即完成。",
+        inline=False,
+    )
+    embed.add_field(
+        name="🧾 人工驗證",
+        value="無法使用學校信箱時，私訊機器人並提交學生證或入學文件。",
+        inline=False,
+    )
+    embed.add_field(
+        name="開始前請準備",
+        value="請確認你已加入正確的 Discord 伺服器，並開啟接收機器人私訊。",
+        inline=False,
+    )
+    return embed
 
 
 class VerificationBot(commands.Bot):
@@ -66,14 +101,28 @@ class VerificationBot(commands.Bot):
         if session is None:
             return
         if not message.attachments:
-            await message.channel.send(
-                "請附上學生證、紙本錄取通知、紙本入學通知，或師大 APP 最新版首頁（含數位證件）畫面。"
+            embed = applicant_embed(
+                title="請附上驗證文件",
+                description="我還沒有收到附件，請在這則私訊中重新上傳文件。",
+                color=discord.Color.gold(),
             )
+            embed.add_field(
+                name="可接受的文件",
+                value="學生證、紙本錄取通知、紙本入學通知，或師大 APP 最新版首頁（含數位證件）畫面。",
+                inline=False,
+            )
+            await message.channel.send(embed=embed)
             return
 
         admin_channel = await self.fetch_channel_safe(self.settings.admin_channel_id)
         if admin_channel is None:
-            await message.channel.send("目前無法聯絡管理員頻道，請稍後再試。")
+            await message.channel.send(
+                embed=applicant_embed(
+                    title="文件暫時無法送出",
+                    description="目前無法聯絡管理員頻道，請稍後重新傳送文件。",
+                    color=discord.Color.red(),
+                )
+            )
             return
 
         files: list[discord.File] = []
@@ -84,18 +133,36 @@ class VerificationBot(commands.Bot):
             except (discord.HTTPException, discord.Forbidden):
                 failed_urls.append(attachment.url)
 
-        content = (
-            "人工驗證申請\n"
-            f"Discord 使用者：{message.author}（ID: {message.author.id}）\n"
-            f"來源伺服器 ID：{session.guild_id}"
+        received_at = message.created_at.timestamp()
+        embed = self.requester_embed(
+            message.author,
+            title="人工驗證申請",
+            description="使用者已上傳文件，請管理員審核。",
+            color=discord.Color.orange(),
+            requested_at=session.requested_at,
         )
+        embed.add_field(name="來源伺服器 ID", value=str(session.guild_id), inline=True)
+        embed.add_field(name="文件收到時間", value=discord_timestamp(received_at), inline=True)
         if failed_urls:
-            content += "\n無法轉存的附件連結：\n" + "\n".join(failed_urls)
-        if files:
-            await admin_channel.send(content=content, files=files)
-        else:
-            await admin_channel.send(content)
-        await message.channel.send("已將你的文件送交管理員，請等待人工驗證。")
+            embed.add_field(
+                name="無法轉存的附件連結",
+                value="\n".join(failed_urls),
+                inline=False,
+            )
+        await admin_channel.send(embed=embed, files=files or [])
+        confirmation = applicant_embed(
+            title="文件已送交管理員 ✅",
+            description="你的文件已成功轉交，請耐心等待人工審核。管理員完成審核後會協助你完成驗證。",
+            color=discord.Color.green(),
+        )
+        confirmation.add_field(name="已收到文件", value=str(len(files)), inline=True)
+        if failed_urls:
+            confirmation.add_field(
+                name="需要重新確認",
+                value="部分附件無法轉送，請稍後重新上傳那些文件。",
+                inline=False,
+            )
+        await message.channel.send(embed=confirmation)
 
     async def fetch_channel_safe(self, channel_id: int) -> Any | None:
         channel = self.get_channel(channel_id)
@@ -107,11 +174,47 @@ class VerificationBot(commands.Bot):
             logger.exception("Unable to access channel %s", channel_id)
             return None
 
-    async def send_admin_message(self, content: str) -> bool:
+    def requester_embed(
+        self,
+        user: discord.User | discord.Member,
+        *,
+        title: str,
+        description: str,
+        color: discord.Color,
+        requested_at: float,
+        passed_at: float | None = None,
+    ) -> discord.Embed:
+        profile_url = f"https://discord.com/users/{user.id}"
+        embed = discord.Embed(title=title, description=description, color=color)
+        embed.set_author(
+            name=f"{user.display_name} ({user.id})",
+            url=profile_url,
+            icon_url=user.display_avatar.url,
+        )
+        embed.add_field(
+            name="申請人",
+            value=f"{user.mention}\n[開啟 Discord 個人檔案]({profile_url})",
+            inline=False,
+        )
+        embed.add_field(name="申請時間", value=discord_timestamp(requested_at), inline=True)
+        if passed_at is not None:
+            embed.add_field(name="通過時間", value=discord_timestamp(passed_at), inline=True)
+            embed.timestamp = datetime.fromtimestamp(passed_at, tz=timezone.utc)
+        else:
+            embed.timestamp = datetime.fromtimestamp(requested_at, tz=timezone.utc)
+        return embed
+
+    async def send_admin_embed(
+        self,
+        embed: discord.Embed,
+        *,
+        content: str | None = None,
+        files: list[discord.File] | None = None,
+    ) -> bool:
         channel = await self.fetch_channel_safe(self.settings.admin_channel_id)
         if channel is None:
             return False
-        await channel.send(content)
+        await channel.send(content=content, embed=embed, files=files or [])
         return True
 
     def roles_for_student(self, guild: discord.Guild, student_number: str) -> list[discord.Role]:
@@ -157,7 +260,10 @@ class VerificationPanelView(discord.ui.View):
         self.bot = bot
 
     @discord.ui.button(
-        label="學校信箱驗證", style=discord.ButtonStyle.primary, custom_id="ntnu:email"
+        label="學校信箱驗證",
+        emoji="📧",
+        style=discord.ButtonStyle.primary,
+        custom_id="ntnu:email",
     )
     async def email_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
@@ -165,27 +271,77 @@ class VerificationPanelView(discord.ui.View):
         await interaction.response.send_modal(SchoolEmailModal(self.bot))
 
     @discord.ui.button(
-        label="人工驗證", style=discord.ButtonStyle.secondary, custom_id="ntnu:manual"
+        label="人工驗證",
+        emoji="🧾",
+        style=discord.ButtonStyle.secondary,
+        custom_id="ntnu:manual",
     )
     async def manual_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         if interaction.guild is None:
-            await interaction.response.send_message("請在伺服器內使用此按鈕。", ephemeral=True)
+            await interaction.response.send_message(
+                embed=applicant_embed(
+                    title="請回到伺服器操作",
+                    description="這個驗證按鈕只能在 Discord 伺服器內使用。",
+                    color=discord.Color.red(),
+                ),
+                ephemeral=True,
+            )
             return
-        self.bot.database.save_manual_session(interaction.user.id, interaction.guild.id)
+        requested_at = interaction.created_at.timestamp()
+        self.bot.database.save_manual_session(
+            interaction.user.id,
+            interaction.guild.id,
+            requested_at=requested_at,
+        )
+        instructions = applicant_embed(
+            title="人工驗證已開啟",
+            description="下一步：請開啟與機器人的私訊，並上傳一份或多份驗證文件。",
+            color=discord.Color.blurple(),
+        )
+        instructions.add_field(
+            name="可接受的文件",
+            value="學生證、紙本錄取通知、紙本入學通知，或師大 APP 最新版首頁（含數位證件）畫面。",
+            inline=False,
+        )
+        instructions.add_field(
+            name="審核方式",
+            value="文件會轉送給管理員人工審核，請等待審核結果。",
+            inline=False,
+        )
         await interaction.response.send_message(
-            "請私訊本機器人，附上學生證／紙本錄取通知／紙本入學通知／師大 APP 最新版首頁畫面。"
-            "文件會轉送至管理員頻道，請等待真人審核。",
+            embed=instructions,
             ephemeral=True,
         )
         try:
-            await interaction.user.send(
-                "人工驗證已開啟。請在這則私訊中上傳一份或多份文件，完成後請等待管理員審核。"
+            dm_instructions = applicant_embed(
+                title="人工驗證文件上傳",
+                description="請在這則私訊中上傳一份或多份文件。上傳後請等待管理員審核。",
+                color=discord.Color.blurple(),
             )
+            dm_instructions.add_field(
+                name="提醒",
+                value="請確認圖片清晰、資料完整，且文件上的姓名或學號可辨識。",
+                inline=False,
+            )
+            await interaction.user.send(embed=dm_instructions)
         except discord.Forbidden:
-            await self.bot.send_admin_message(
-                f"使用者 {interaction.user}（ID: {interaction.user.id}）無法接收私訊，請協助人工驗證。"
+            embed = self.bot.requester_embed(
+                interaction.user,
+                title="人工驗證需要協助",
+                description="使用者無法接收機器人私訊，請管理員主動協助人工驗證。",
+                color=discord.Color.red(),
+                requested_at=requested_at,
+            )
+            await self.bot.send_admin_embed(embed)
+            await interaction.followup.send(
+                embed=applicant_embed(
+                    title="無法開啟私訊",
+                    description="你的隱私設定阻擋了機器人私訊。請允許伺服器成員或機器人傳送私訊後，再重新點選人工驗證。",
+                    color=discord.Color.red(),
+                ),
+                ephemeral=True,
             )
 
 
@@ -205,15 +361,27 @@ class SchoolEmailModal(discord.ui.Modal, title="學校信箱驗證"):
         parsed = parse_student_email(str(self.email))
         if parsed is None:
             await interaction.response.send_message(
-                "信箱格式不正確，請使用 XXX47XXXs@gapps.ntnu.edu.tw 或 XXX47XXXs@ntnu.edu.tw。",
+                embed=applicant_embed(
+                    title="學校信箱格式不正確",
+                    description="請輸入有效的 NTNU 學校信箱，再重新提交。",
+                    color=discord.Color.red(),
+                ),
                 ephemeral=True,
             )
             return
         if interaction.guild is None:
-            await interaction.response.send_message("請在伺服器內完成驗證。", ephemeral=True)
+            await interaction.response.send_message(
+                embed=applicant_embed(
+                    title="請回到伺服器完成驗證",
+                    description="學校信箱驗證必須在 Discord 伺服器內進行。",
+                    color=discord.Color.red(),
+                ),
+                ephemeral=True,
+            )
             return
 
         student_number, email = parsed
+        requested_at = interaction.created_at.timestamp()
         code = make_verification_code(
             email,
             self.bot.settings.hash_secret_part_1,
@@ -225,7 +393,12 @@ class SchoolEmailModal(discord.ui.Modal, title="學校信箱驗證"):
         except Exception:
             logger.exception("Failed to send verification email to %s", email)
             await interaction.followup.send(
-                "驗證信寄送失敗，請稍後再試或改用人工驗證。", ephemeral=True
+                embed=applicant_embed(
+                    title="驗證信寄送失敗",
+                    description="目前無法寄出驗證信，請稍後再試；如果問題持續，也可以改用人工驗證。",
+                    color=discord.Color.red(),
+                ),
+                ephemeral=True,
             )
             return
 
@@ -236,9 +409,26 @@ class SchoolEmailModal(discord.ui.Modal, title="學校信箱驗證"):
             student_number,
             code,
             time.time() + self.bot.settings.verification_code_ttl_minutes * 60,
+            requested_at=requested_at,
+        )
+        email_sent = applicant_embed(
+            title="驗證信已寄出 📬",
+            description="請查看你的信箱，取得驗證碼後點選下方按鈕完成驗證。",
+            color=discord.Color.green(),
+        )
+        email_sent.add_field(name="寄送至", value=f"`{email}`", inline=False)
+        email_sent.add_field(
+            name="有效期限",
+            value=f"{self.bot.settings.verification_code_ttl_minutes} 分鐘",
+            inline=True,
+        )
+        email_sent.add_field(
+            name="找不到信件？",
+            value="請先檢查垃圾郵件、垃圾信件匣或促銷內容匣；確認後仍找不到，再重新申請。",
+            inline=True,
         )
         await interaction.followup.send(
-            f"驗證碼已寄到 `{email}`，請點選下方按鈕輸入（{self.bot.settings.verification_code_ttl_minutes} 分鐘內有效）。",
+            embed=email_sent,
             view=CodeEntryView(self.bot),
             ephemeral=True,
         )
@@ -249,7 +439,7 @@ class CodeEntryView(discord.ui.View):
         super().__init__(timeout=600)
         self.bot = bot
 
-    @discord.ui.button(label="輸入驗證碼", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="輸入驗證碼", emoji="🔐", style=discord.ButtonStyle.success)
     async def code_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
@@ -266,28 +456,67 @@ class CodeModal(discord.ui.Modal, title="輸入信箱驗證碼"):
     async def on_submit(self, interaction: discord.Interaction) -> None:
         session = self.bot.database.get_email_session(interaction.user.id)
         if session is None:
-            await interaction.response.send_message("找不到待驗證資料，請重新開始。", ephemeral=True)
+            await interaction.response.send_message(
+                embed=applicant_embed(
+                    title="找不到待驗證資料",
+                    description="這組驗證流程可能已經完成或失效，請回到驗證面板重新開始。",
+                    color=discord.Color.red(),
+                ),
+                ephemeral=True,
+            )
             return
         if time.time() > session.expires_at:
             self.bot.database.delete_email_session(interaction.user.id)
-            await interaction.response.send_message("驗證碼已過期，請重新寄送。", ephemeral=True)
+            await interaction.response.send_message(
+                embed=applicant_embed(
+                    title="驗證碼已過期",
+                    description="請重新點選學校信箱驗證，再寄送一組新的驗證碼。",
+                    color=discord.Color.gold(),
+                ),
+                ephemeral=True,
+            )
             return
         if not codes_match(session.code, str(self.code)):
-            await interaction.response.send_message("驗證碼不正確，請確認信件內容。", ephemeral=True)
+            await interaction.response.send_message(
+                embed=applicant_embed(
+                    title="驗證碼不正確",
+                    description="請確認你輸入的是最新一封信中的 32 位驗證碼，再試一次。",
+                    color=discord.Color.red(),
+                ),
+                ephemeral=True,
+            )
             return
         if interaction.guild is None or interaction.guild.id != session.guild_id:
-            await interaction.response.send_message("請回到原本的 Discord 伺服器完成驗證。", ephemeral=True)
+            await interaction.response.send_message(
+                embed=applicant_embed(
+                    title="請回到原本的伺服器",
+                    description="這組驗證碼只能在你開始驗證的 Discord 伺服器使用。",
+                    color=discord.Color.red(),
+                ),
+                ephemeral=True,
+            )
             return
 
         roles = self.bot.roles_for_student(interaction.guild, session.student_number)
         if not roles:
             await interaction.response.send_message(
-                "信箱驗證成功，但尚未設定此學號對應的 Discord 身分組，請聯絡管理員。",
+                embed=applicant_embed(
+                    title="信箱驗證完成，但需要管理員協助",
+                    description="你的驗證碼正確，不過目前沒有設定對應的 Discord 身分組。管理員會協助處理。",
+                    color=discord.Color.gold(),
+                ),
                 ephemeral=True,
             )
-            await self.bot.send_admin_message(
-                f"信箱驗證成功但缺少角色設定：Discord ID {interaction.user.id}，email {session.email}，學號 {session.student_number}。"
+            embed = self.bot.requester_embed(
+                interaction.user,
+                title="信箱驗證通過，但缺少角色設定",
+                description="驗證碼正確，但找不到此學號對應的 Discord 身分組。",
+                color=discord.Color.red(),
+                requested_at=session.requested_at,
             )
+            embed.add_field(name="Email", value=session.email, inline=True)
+            embed.add_field(name="學號", value=session.student_number, inline=True)
+            await self.bot.send_admin_embed(embed)
             return
 
         member = interaction.guild.get_member(interaction.user.id)
@@ -297,7 +526,14 @@ class CodeModal(discord.ui.Modal, title="輸入信箱驗證碼"):
             except (discord.HTTPException, discord.NotFound):
                 member = None
         if member is None:
-            await interaction.response.send_message("找不到你的伺服器成員資料，請聯絡管理員。", ephemeral=True)
+            await interaction.response.send_message(
+                embed=applicant_embed(
+                    title="找不到伺服器成員資料",
+                    description="請稍後再試；如果問題持續，請聯絡管理員。",
+                    color=discord.Color.red(),
+                ),
+                ephemeral=True,
+            )
             return
 
         try:
@@ -305,16 +541,42 @@ class CodeModal(discord.ui.Modal, title="輸入信箱驗證碼"):
         except (discord.Forbidden, discord.HTTPException):
             logger.exception("Failed to assign roles to %s", member.id)
             await interaction.response.send_message(
-                "驗證成功，但身分組無法自動發放，請聯絡管理員。", ephemeral=True
+                embed=applicant_embed(
+                    title="驗證完成，但身分組發放失敗",
+                    description="你的驗證碼正確，但身分組暫時無法自動發放。請聯絡管理員協助。",
+                    color=discord.Color.gold(),
+                ),
+                ephemeral=True,
             )
             return
 
+        passed_at = time.time()
+        self.bot.database.mark_verification_passed(
+            interaction.user.id,
+            "email",
+            passed_at=passed_at,
+        )
         self.bot.database.delete_email_session(interaction.user.id)
         role_names = "、".join(role.name for role in roles)
-        await interaction.response.send_message(f"驗證成功，已取得身分組：{role_names}。", ephemeral=True)
-        await self.bot.send_admin_message(
-            f"信箱驗證成功：Discord ID {interaction.user.id}，email {session.email}，角色 {role_names}。"
+        success = applicant_embed(
+            title="驗證成功 🎉",
+            description="恭喜！你已完成學生驗證，以下身分組已加入你的帳號。",
+            color=discord.Color.green(),
         )
+        success.add_field(name="已取得身分組", value=role_names, inline=False)
+        await interaction.response.send_message(embed=success, ephemeral=True)
+        embed = self.bot.requester_embed(
+            interaction.user,
+            title="信箱驗證成功",
+            description="使用者已通過學校信箱驗證並取得身分組。",
+            color=discord.Color.green(),
+            requested_at=session.requested_at,
+            passed_at=passed_at,
+        )
+        embed.add_field(name="Email", value=session.email, inline=True)
+        embed.add_field(name="學號", value=session.student_number, inline=True)
+        embed.add_field(name="已發放身分組", value=role_names, inline=False)
+        await self.bot.send_admin_embed(embed)
 
 
 def create_bot() -> VerificationBot:

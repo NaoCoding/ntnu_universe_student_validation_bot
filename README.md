@@ -2,8 +2,10 @@
 
 This bot provides two verification paths in Discord:
 
-1. Students with an NTNU CS email receive an MD5 verification code through the Gmail API. A successful code entry assigns a configured Discord role and posts the Discord ID and email to the admin-only channel.
-2. Users without a qualifying email can opt into manual verification. They receive a DM prompt, and attachments sent to the bot by DM are forwarded to the admin-only channel for human review.
+1. Students with an NTNU CS email receive an MD5 verification code through the Gmail API. A successful code entry assigns a configured Discord role and posts a rich embed containing the requester profile, email, role, request time, and pass time to the admin-only channel.
+2. Users without a qualifying email can opt into manual verification. They receive a DM prompt, and attachments sent to the bot by DM are forwarded to the admin-only channel for human review with the requester profile and request time.
+
+Verification requests are stored in the SQLite `verification_records` table. Each record keeps Unix timestamps for `requested_at` and, when the automated email verification succeeds, `passed_at`.
 
 ## Setup
 
