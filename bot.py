@@ -52,7 +52,7 @@ def panel_embed() -> discord.Embed:
     )
     embed.add_field(
         name="📧 學校信箱驗證",
-        value="使用 NTNU 學校信箱收取驗證碼，通常可立即完成。",
+        value="使用 NTNU 學校信箱收取驗證碼，通常可立即完成。請注意此方式僅限本系生 aka 學號系所代號為 47 的學生",
         inline=False,
     )
     embed.add_field(
