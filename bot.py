@@ -38,7 +38,7 @@ def applicant_embed(
     """Build a consistent, readable embed for applicant-facing messages."""
 
     embed = discord.Embed(title=title, description=description, color=color)
-    embed.set_footer(text="NTNU Universe｜學生驗證中心")
+    embed.set_footer(text="NTNU Universe｜學生驗證機器人")
     return embed
 
 
