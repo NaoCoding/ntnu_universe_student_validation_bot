@@ -44,7 +44,6 @@ class Settings:
     gmail_credentials_file: Path
     gmail_token_file: Path
     gmail_sender_email: str
-    hash_prefix: str
     hash_secret_part_1: str
     hash_secret_part_2: str
     student_role_map: dict[str, str]
@@ -71,7 +70,6 @@ class Settings:
             gmail_credentials_file=Path(os.getenv("GMAIL_CREDENTIALS_FILE", "credentials.json")),
             gmail_token_file=Path(os.getenv("GMAIL_TOKEN_FILE", "token.json")),
             gmail_sender_email=_required("GMAIL_SENDER_EMAIL"),
-            hash_prefix=_required("VERIFICATION_HASH_PREFIX"),
             hash_secret_part_1=_required("VERIFICATION_HASH_SECRET_PART_1"),
             hash_secret_part_2=_required("VERIFICATION_HASH_SECRET_PART_2"),
             student_role_map=_role_map("STUDENT_ROLE_MAP_JSON"),

@@ -44,9 +44,9 @@ This bot provides two verification paths in Discord:
 The sent code is exactly:
 
 ```text
-MD5(CONCAT(VERIFICATION_HASH_PREFIX,
+MD5(CONCAT(normalized_user_email,
            CONCAT(VERIFICATION_HASH_SECRET_PART_1,
-                 VERIFICATION_HASH_SECRET_PART_2)))
+                  VERIFICATION_HASH_SECRET_PART_2)))
 ```
 
 Set the real values only in `.env`; do not commit them. The sample `.env.example` contains placeholders only.

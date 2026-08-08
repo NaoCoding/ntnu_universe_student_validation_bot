@@ -215,7 +215,7 @@ class SchoolEmailModal(discord.ui.Modal, title="學校信箱驗證"):
 
         student_number, email = parsed
         code = make_verification_code(
-            self.bot.settings.hash_prefix,
+            email,
             self.bot.settings.hash_secret_part_1,
             self.bot.settings.hash_secret_part_2,
         )
