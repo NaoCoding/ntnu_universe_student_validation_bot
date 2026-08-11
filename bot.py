@@ -62,7 +62,7 @@ def panel_embed() -> discord.Embed:
     )
     embed.add_field(
         name="開始前請準備",
-        value="請確認你已加入正確的 Discord 伺服器，並開啟接收機器人私訊。",
+        value="請確認你已加入正確的 Discord 伺服器，並開啟接收機器人私訊。此外，請你將伺服器的個人暱稱改為你的本名，本伺服器為實名制伺服器。",
         inline=False,
     )
     return embed
